@@ -1,4 +1,5 @@
 import os
+import argparse
 
 import torch
 from PIL import Image
@@ -6,38 +7,72 @@ from torchvision import transforms
 
 from dataset import SuperResolutionDataset
 from model import SRCNN
+from fsrcnn import FSRCNN
 
 
-# =========================
-# Configuration
-# =========================
+# ============================================================
+# ARGUMENTS
+# ============================================================
+
+parser = argparse.ArgumentParser()
+
+parser.add_argument(
+    "--model",
+    type=str,
+    default="srcnn",
+    choices=["srcnn", "fsrcnn"],
+    help="Model to evaluate"
+)
+
+args = parser.parse_args()
+
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
 
 TEST_DIR = "data/test"
-MODEL_PATH = "outputs/models/srcnn_best.pth"
 
-OUTPUT_DIR = "outputs/predictions"
+MODEL_PATH = f"outputs/models/{args.model}_best.pth"
+
+OUTPUT_DIR = f"outputs/predictions/{args.model}"
 
 DEVICE = torch.device(
     "cuda" if torch.cuda.is_available() else "cpu"
 )
 
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(
+    OUTPUT_DIR,
+    exist_ok=True
+)
+
+
+# ============================================================
+# TRANSFORMS
+# ============================================================
 
 to_tensor = transforms.ToTensor()
 to_pil = transforms.ToPILImage()
 
 
-# =========================
+# ============================================================
+# GET TEST FILENAMES
+# ============================================================
+
+TEST_FILENAMES = sorted(
+    os.listdir(
+        os.path.join(TEST_DIR, "input")
+    )
+)
+
+
+# ============================================================
 # PSNR
-# =========================
+# ============================================================
 
 def calculate_psnr(mse):
-    """
-    Calculate PSNR assuming pixel values
-    are in the range [0, 1].
-    """
 
-    if mse <= 0:
+    if mse == 0:
         return float("inf")
 
     return 10 * torch.log10(
@@ -45,13 +80,19 @@ def calculate_psnr(mse):
     ).item()
 
 
-# =========================
-# Load trained SRCNN
-# =========================
+# ============================================================
+# LOAD MODEL
+# ============================================================
 
 def load_model():
 
-    model = SRCNN().to(DEVICE)
+    if args.model == "srcnn":
+
+        model = SRCNN()
+
+    else:
+
+        model = FSRCNN()
 
     model.load_state_dict(
         torch.load(
@@ -60,122 +101,148 @@ def load_model():
         )
     )
 
+    model.to(DEVICE)
+
     model.eval()
 
     return model
 
 
-# =========================
-# Evaluate SRCNN
-# =========================
+# ============================================================
+# EVALUATE SRCNN / FSRCNN
+# ============================================================
 
-def evaluate_srcnn(model, dataset):
+def evaluate_model(model, dataset):
 
     total_squared_error = 0.0
     total_pixels = 0
 
-    print("\nEvaluating SRCNN...")
-
     with torch.no_grad():
 
-        for index in range(len(dataset)):
+        for i in range(len(dataset)):
 
-            input_tensor, target_tensor = dataset[index]
+            input_tensor, target_tensor = dataset[i]
 
-            # Add batch dimension
-            input_batch = input_tensor.unsqueeze(0).to(DEVICE)
+            input_batch = (
+                input_tensor
+                .unsqueeze(0)
+                .to(DEVICE)
+            )
 
-            # SRCNN prediction
-            output = model(input_batch)
+            # Forward pass
+            output = model(
+                input_batch
+            )
 
-            # Keep image values valid
+            # Keep pixel values in [0, 1]
             output = torch.clamp(
                 output,
-                0.0,
-                1.0
+                0,
+                1
             )
 
-            target = target_tensor.unsqueeze(0).to(DEVICE)
+            # Remove batch dimension
+            output = output.squeeze(0).cpu()
 
             # Calculate squared error
-            squared_error = torch.sum(
-                (output - target) ** 2
-            ).item()
-
-            total_squared_error += squared_error
-            total_pixels += target.numel()
-
-            # Save prediction
-            output_image = output.squeeze(0).cpu()
-
-            filename = dataset.image_names[index]
-
-            output_path = os.path.join(
-                OUTPUT_DIR,
-                f"srcnn_{filename}"
+            squared_error = (
+                (output - target_tensor) ** 2
             )
 
-            to_pil(output_image).save(output_path)
+            total_squared_error += (
+                squared_error.sum().item()
+            )
 
-    mse = total_squared_error / total_pixels
+            total_pixels += (
+                squared_error.numel()
+            )
+
+            # Save prediction
+            output_image = to_pil(
+                output
+            )
+
+            filename = TEST_FILENAMES[i]
+
+            output_image.save(
+                os.path.join(
+                    OUTPUT_DIR,
+                    f"{args.model}_{filename}"
+                )
+            )
+
+    mse = (
+        total_squared_error /
+        total_pixels
+    )
 
     psnr = calculate_psnr(mse)
 
     return mse, psnr
 
 
-# =========================
-# Evaluate interpolation
-# =========================
+# ============================================================
+# INTERPOLATION BASELINES
+# ============================================================
 
-def evaluate_interpolation(dataset, method):
+def evaluate_interpolation(
+    dataset,
+    method
+):
 
     total_squared_error = 0.0
     total_pixels = 0
 
-    print(f"\nEvaluating {method}...")
+    for i in range(len(dataset)):
 
-    for index in range(len(dataset)):
+        filename = TEST_FILENAMES[i]
 
-        # We use the ORIGINAL target image
-        # to create the common 112x112 LR image.
-        _, target_tensor = dataset[index]
+        # ----------------------------------------------------
+        # Load ground truth
+        # ----------------------------------------------------
 
-        target_image = to_pil(target_tensor)
-
-        # ---------------------------------
-        # Create the common low-resolution
-        # image used by every baseline
-        # ---------------------------------
-
-        low_res = target_image.resize(
-            (112, 112),
-            resample=Image.Resampling.BILINEAR
+        target_path = os.path.join(
+            TEST_DIR,
+            "target",
+            filename
         )
 
-        # ---------------------------------
-        # Upsample using selected method
-        # ---------------------------------
+        target_image = Image.open(
+            target_path
+        ).convert("RGB")
+
+        # ----------------------------------------------------
+        # Create 112x112 low-resolution image
+        # ----------------------------------------------------
+
+        lr_image = target_image.resize(
+            (112, 112),
+            Image.Resampling.BILINEAR
+        )
+
+        # ----------------------------------------------------
+        # Upsample to 224x224
+        # ----------------------------------------------------
 
         if method == "nearest":
 
-            reconstructed = low_res.resize(
+            output_image = lr_image.resize(
                 (224, 224),
-                resample=Image.Resampling.NEAREST
+                Image.Resampling.NEAREST
             )
 
         elif method == "bilinear":
 
-            reconstructed = low_res.resize(
+            output_image = lr_image.resize(
                 (224, 224),
-                resample=Image.Resampling.BILINEAR
+                Image.Resampling.BILINEAR
             )
 
         elif method == "bicubic":
 
-            reconstructed = low_res.resize(
+            output_image = lr_image.resize(
                 (224, 224),
-                resample=Image.Resampling.BICUBIC
+                Image.Resampling.BICUBIC
             )
 
         else:
@@ -184,155 +251,176 @@ def evaluate_interpolation(dataset, method):
                 f"Unknown interpolation method: {method}"
             )
 
-        # Convert reconstructed image to tensor
-        reconstructed_tensor = to_tensor(
-            reconstructed
-        ).unsqueeze(0)
+        # ----------------------------------------------------
+        # Convert images to tensors
+        # ----------------------------------------------------
 
-        target = target_tensor.unsqueeze(0)
-
-        # Calculate squared error
-        squared_error = torch.sum(
-            (reconstructed_tensor - target) ** 2
-        ).item()
-
-        total_squared_error += squared_error
-        total_pixels += target.numel()
-
-        # Save baseline prediction
-        filename = dataset.image_names[index]
-
-        output_path = os.path.join(
-            OUTPUT_DIR,
-            f"{method}_{filename}"
+        output_tensor = to_tensor(
+            output_image
         )
 
-        reconstructed.save(output_path)
+        target_tensor = to_tensor(
+            target_image
+        )
 
-    mse = total_squared_error / total_pixels
+        # ----------------------------------------------------
+        # Calculate squared error
+        # ----------------------------------------------------
+
+        squared_error = (
+            (output_tensor - target_tensor) ** 2
+        )
+
+        total_squared_error += (
+            squared_error.sum().item()
+        )
+
+        total_pixels += (
+            squared_error.numel()
+        )
+
+        # ----------------------------------------------------
+        # Save baseline output
+        # ----------------------------------------------------
+
+        output_image.save(
+            os.path.join(
+                OUTPUT_DIR,
+                f"{method}_{filename}"
+            )
+        )
+
+    mse = (
+        total_squared_error /
+        total_pixels
+    )
 
     psnr = calculate_psnr(mse)
 
     return mse, psnr
 
 
-# =========================
-# Main
-# =========================
+# ============================================================
+# MAIN
+# ============================================================
 
 def main():
 
-    print("=" * 55)
-    print("SRCNN TEST EVALUATION")
-    print("=" * 55)
-
-    print("Device:", DEVICE)
-
-    # =========================
-    # Load test dataset
-    # =========================
-
-    test_dataset = SuperResolutionDataset(TEST_DIR)
+    print("\n" + "=" * 60)
+    print(f"{args.model.upper()} EVALUATION")
+    print("=" * 60)
 
     print(
-        "Test samples:",
-        len(test_dataset)
+        f"Device: {DEVICE}"
     )
 
-    # =========================
-    # Load trained SRCNN
-    # =========================
+    print(
+        f"Model: {MODEL_PATH}"
+    )
+
+    # --------------------------------------------------------
+    # Dataset
+    # --------------------------------------------------------
+
+    dataset = SuperResolutionDataset(
+        TEST_DIR
+    )
+
+    print(
+        f"Test images: {len(dataset)}"
+    )
+
+    # --------------------------------------------------------
+    # Load model
+    # --------------------------------------------------------
 
     model = load_model()
 
-    print(
-        "\nLoaded model:",
-        MODEL_PATH
-    )
+    # --------------------------------------------------------
+    # Evaluate SRCNN / FSRCNN
+    # --------------------------------------------------------
 
-    # =========================
-    # SRCNN
-    # =========================
-
-    srcnn_mse, srcnn_psnr = evaluate_srcnn(
+    model_mse, model_psnr = evaluate_model(
         model,
-        test_dataset
+        dataset
     )
 
-    # =========================
-    # Baselines
-    # =========================
+    # --------------------------------------------------------
+    # Evaluate interpolation baselines
+    # --------------------------------------------------------
 
-    nearest_mse, nearest_psnr = evaluate_interpolation(
-        test_dataset,
-        "nearest"
+    nearest_mse, nearest_psnr = (
+        evaluate_interpolation(
+            dataset,
+            "nearest"
+        )
     )
 
-    bilinear_mse, bilinear_psnr = evaluate_interpolation(
-        test_dataset,
-        "bilinear"
+    bilinear_mse, bilinear_psnr = (
+        evaluate_interpolation(
+            dataset,
+            "bilinear"
+        )
     )
 
-    bicubic_mse, bicubic_psnr = evaluate_interpolation(
-        test_dataset,
-        "bicubic"
+    bicubic_mse, bicubic_psnr = (
+        evaluate_interpolation(
+            dataset,
+            "bicubic"
+        )
     )
 
-    # =========================
-    # Final results
-    # =========================
+    # --------------------------------------------------------
+    # Final Results
+    # --------------------------------------------------------
 
-    print("\n" + "=" * 55)
+    print("\n" + "=" * 60)
     print("FINAL TEST RESULTS")
-    print("=" * 55)
+    print("=" * 60)
 
     print(
-        f"Nearest Neighbor : "
-        f"{nearest_psnr:.3f} dB"
+        f"{'Method':<20}"
+        f"{'MSE':<15}"
+        f"{'PSNR (dB)':<15}"
+    )
+
+    print("-" * 60)
+
+    print(
+        f"{'Nearest Neighbor':<20}"
+        f"{nearest_mse:<15.6f}"
+        f"{nearest_psnr:<15.3f}"
     )
 
     print(
-        f"Bilinear         : "
-        f"{bilinear_psnr:.3f} dB"
+        f"{'Bilinear':<20}"
+        f"{bilinear_mse:<15.6f}"
+        f"{bilinear_psnr:<15.3f}"
     )
 
     print(
-        f"Bicubic          : "
-        f"{bicubic_psnr:.3f} dB"
+        f"{'Bicubic':<20}"
+        f"{bicubic_mse:<15.6f}"
+        f"{bicubic_psnr:<15.3f}"
     )
 
     print(
-        f"SRCNN            : "
-        f"{srcnn_psnr:.3f} dB"
+        f"{args.model.upper():<20}"
+        f"{model_mse:<15.6f}"
+        f"{model_psnr:<15.3f}"
     )
 
-    print("\nMSE values:")
+    print("=" * 60)
 
     print(
-        f"Nearest Neighbor : "
-        f"{nearest_mse:.6f}"
+        f"\nPredictions saved to: "
+        f"{OUTPUT_DIR}"
     )
 
-    print(
-        f"Bilinear         : "
-        f"{bilinear_mse:.6f}"
-    )
 
-    print(
-        f"Bicubic          : "
-        f"{bicubic_mse:.6f}"
-    )
-
-    print(
-        f"SRCNN            : "
-        f"{srcnn_mse:.6f}"
-    )
-
-    print(
-        "\nPredictions saved to:",
-        OUTPUT_DIR
-    )
-
+# ============================================================
+# RUN
+# ============================================================
 
 if __name__ == "__main__":
     main()

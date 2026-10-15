@@ -2,40 +2,47 @@ import os
 import matplotlib.pyplot as plt
 
 
-# =========================
-# Final test results
-# =========================
-
-methods = [
-    "Nearest Neighbor",
-    "Bilinear",
-    "Bicubic",
-    "SRCNN"
-]
-
-psnr_values = [
-    24.667,
-    24.678,
-    25.678,
-    26.372
-]
-
-mse_values = [
-    0.003415,
-    0.003406,
-    0.002705,
-    0.002306
-]
-
+# ============================================================
+# OUTPUT DIRECTORY
+# ============================================================
 
 OUTPUT_DIR = "outputs/plots"
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
-# =========================
-# PSNR comparison
-# =========================
+# ============================================================
+# FINAL TEST RESULTS
+# ============================================================
+
+methods = [
+    "Nearest Neighbor",
+    "Bilinear",
+    "Bicubic",
+    "SRCNN",
+    "FSRCNN"
+]
+
+mse_values = [
+    0.003415,
+    0.003406,
+    0.002705,
+    0.002306,
+    0.001658
+]
+
+psnr_values = [
+    24.667,
+    24.678,
+    25.678,
+    26.372,
+    27.805
+]
+
+
+# ============================================================
+# PSNR COMPARISON
+# ============================================================
 
 plt.figure(figsize=(10, 6))
 
@@ -44,18 +51,18 @@ bars = plt.bar(
     psnr_values
 )
 
-plt.ylabel("PSNR (dB)")
 plt.xlabel("Method")
-plt.title("Test PSNR Comparison")
+plt.ylabel("PSNR (dB)")
+plt.title("PSNR Comparison")
 
-plt.ylim(
-    min(psnr_values) - 1,
-    max(psnr_values) + 1
+plt.xticks(
+    rotation=15,
+    ha="right"
 )
 
-plt.grid(
-    axis="y",
-    alpha=0.3
+plt.ylim(
+    20,
+    max(psnr_values) + 2
 )
 
 # Add values above bars
@@ -63,7 +70,7 @@ for bar, value in zip(bars, psnr_values):
 
     plt.text(
         bar.get_x() + bar.get_width() / 2,
-        bar.get_height() + 0.05,
+        bar.get_height() + 0.1,
         f"{value:.3f}",
         ha="center",
         va="bottom"
@@ -71,23 +78,20 @@ for bar, value in zip(bars, psnr_values):
 
 plt.tight_layout()
 
-psnr_path = os.path.join(
-    OUTPUT_DIR,
-    "psnr_comparison.png"
-)
-
 plt.savefig(
-    psnr_path,
-    dpi=200,
-    bbox_inches="tight"
+    os.path.join(
+        OUTPUT_DIR,
+        "psnr_comparison.png"
+    ),
+    dpi=300
 )
 
 plt.close()
 
 
-# =========================
-# MSE comparison
-# =========================
+# ============================================================
+# MSE COMPARISON
+# ============================================================
 
 plt.figure(figsize=(10, 6))
 
@@ -96,20 +100,21 @@ bars = plt.bar(
     mse_values
 )
 
-plt.ylabel("MSE")
 plt.xlabel("Method")
-plt.title("Test MSE Comparison")
+plt.ylabel("MSE")
+plt.title("MSE Comparison")
 
-plt.grid(
-    axis="y",
-    alpha=0.3
+plt.xticks(
+    rotation=15,
+    ha="right"
 )
 
+# Add values above bars
 for bar, value in zip(bars, mse_values):
 
     plt.text(
         bar.get_x() + bar.get_width() / 2,
-        bar.get_height(),
+        bar.get_height() + 0.00003,
         f"{value:.6f}",
         ha="center",
         va="bottom"
@@ -117,26 +122,59 @@ for bar, value in zip(bars, mse_values):
 
 plt.tight_layout()
 
-mse_path = os.path.join(
-    OUTPUT_DIR,
-    "mse_comparison.png"
-)
-
 plt.savefig(
-    mse_path,
-    dpi=200,
-    bbox_inches="tight"
+    os.path.join(
+        OUTPUT_DIR,
+        "mse_comparison.png"
+    ),
+    dpi=300
 )
 
 plt.close()
 
 
-print("Results graphs generated successfully.")
+# ============================================================
+# SUMMARY
+# ============================================================
+
+print("=" * 60)
+print("FINAL MODEL COMPARISON")
+print("=" * 60)
+
+for method, mse, psnr in zip(
+    methods,
+    mse_values,
+    psnr_values
+):
+
+    print(
+        f"{method:<20}"
+        f"MSE: {mse:.6f}   "
+        f"PSNR: {psnr:.3f} dB"
+    )
+
+print("=" * 60)
 
 print(
-    f"PSNR graph: {psnr_path}"
+    f"\nBest Model: FSRCNN"
 )
 
 print(
-    f"MSE graph: {mse_path}"
+    f"Best PSNR: {max(psnr_values):.3f} dB"
+)
+
+print(
+    f"Best MSE: {min(mse_values):.6f}"
+)
+
+print(
+    "\nGraphs saved to:"
+)
+
+print(
+    "outputs/plots/psnr_comparison.png"
+)
+
+print(
+    "outputs/plots/mse_comparison.png"
 )

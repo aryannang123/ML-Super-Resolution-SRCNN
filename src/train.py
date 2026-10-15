@@ -1,49 +1,77 @@
 import os
-
+import argparse
 import torch
 import torch.nn as nn
 import matplotlib.pyplot as plt
+
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from dataset import SuperResolutionDataset
 from model import SRCNN
+from fsrcnn import FSRCNN
 
 
-# =========================
-# Configuration
-# =========================
+# ============================================================
+# ARGUMENTS
+# ============================================================
+
+parser = argparse.ArgumentParser()
+
+parser.add_argument(
+    "--model",
+    type=str,
+    default="srcnn",
+    choices=["srcnn", "fsrcnn"],
+    help="Model to train"
+)
+
+args = parser.parse_args()
+
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
 
 TRAIN_DIR = "data/train"
 VAL_DIR = "data/val"
-
-MODEL_DIR = "outputs/models"
-PLOT_DIR = "outputs/plots"
-
 BATCH_SIZE = 2
-LEARNING_RATE = 0.001
-NUM_EPOCHS = 50
+LEARNING_RATE = 0.0001
+NUM_EPOCHS = 100
 
 DEVICE = torch.device(
     "cuda" if torch.cuda.is_available() else "cpu"
 )
 
-
-# =========================
-# Create directories
-# =========================
+MODEL_DIR = "outputs/models"
+PLOT_DIR = "outputs/plots"
 
 os.makedirs(MODEL_DIR, exist_ok=True)
 os.makedirs(PLOT_DIR, exist_ok=True)
 
 
-# =========================
+# ============================================================
+# MODEL SELECTION
+# ============================================================
+
+if args.model == "srcnn":
+
+    model = SRCNN()
+    MODEL_NAME = "srcnn"
+
+else:
+
+    model = FSRCNN()
+    MODEL_NAME = "fsrcnn"
+
+
+# ============================================================
 # PSNR
-# =========================
+# ============================================================
 
 def calculate_psnr(mse):
 
-    if mse <= 0:
+    if mse == 0:
         return float("inf")
 
     return 10 * torch.log10(
@@ -51,15 +79,15 @@ def calculate_psnr(mse):
     ).item()
 
 
-# =========================
-# Validation
-# =========================
+# ============================================================
+# VALIDATION
+# ============================================================
 
 def validate(model, dataloader, criterion):
 
     model.eval()
 
-    total_squared_error = 0.0
+    total_loss = 0.0
     total_pixels = 0
 
     with torch.no_grad():
@@ -71,33 +99,24 @@ def validate(model, dataloader, criterion):
 
             outputs = model(inputs)
 
+            outputs = torch.clamp(outputs, 0, 1)
+
             loss = criterion(outputs, targets)
 
-            outputs_clamped = torch.clamp(
-                outputs,
-                0.0,
-                1.0
-            )
+            total_loss += loss.item() * inputs.size(0)
 
-            squared_error = torch.sum(
-                (outputs_clamped - targets) ** 2
-            ).item()
+            total_pixels += inputs.size(0)
 
-            total_squared_error += squared_error
-            total_pixels += targets.numel()
+    average_loss = total_loss / total_pixels
 
-    average_mse = (
-        total_squared_error / total_pixels
-    )
+    psnr = calculate_psnr(average_loss)
 
-    psnr = calculate_psnr(average_mse)
-
-    return average_mse, psnr
+    return average_loss, psnr
 
 
-# =========================
-# Plot training history
-# =========================
+# ============================================================
+# SAVE PLOTS
+# ============================================================
 
 def save_plots(
     train_losses,
@@ -105,96 +124,81 @@ def save_plots(
     val_psnrs
 ):
 
-    epochs = range(1, len(train_losses) + 1)
-
-    # -------------------------
     # Loss curve
-    # -------------------------
-
-    plt.figure(figsize=(10, 6))
+    plt.figure()
 
     plt.plot(
-        epochs,
         train_losses,
         label="Training Loss"
     )
 
     plt.plot(
-        epochs,
         val_losses,
         label="Validation Loss"
     )
 
     plt.xlabel("Epoch")
     plt.ylabel("MSE Loss")
-    plt.title("SRCNN Training and Validation Loss")
+
+    plt.title(
+        f"{MODEL_NAME.upper()} Training and Validation Loss"
+    )
+
     plt.legend()
     plt.grid(True)
 
-    loss_path = os.path.join(
-        PLOT_DIR,
-        "loss_curve.png"
-    )
-
     plt.savefig(
-        loss_path,
-        dpi=200,
-        bbox_inches="tight"
+        f"{PLOT_DIR}/{MODEL_NAME}_loss_curve.png"
     )
 
     plt.close()
 
-    # -------------------------
-    # PSNR curve
-    # -------------------------
 
-    plt.figure(figsize=(10, 6))
+    # PSNR curve
+    plt.figure()
 
     plt.plot(
-        epochs,
         val_psnrs,
         label="Validation PSNR"
     )
 
     plt.xlabel("Epoch")
     plt.ylabel("PSNR (dB)")
-    plt.title("SRCNN Validation PSNR")
+
+    plt.title(
+        f"{MODEL_NAME.upper()} Validation PSNR"
+    )
+
     plt.legend()
     plt.grid(True)
 
-    psnr_path = os.path.join(
-        PLOT_DIR,
-        "psnr_curve.png"
-    )
-
     plt.savefig(
-        psnr_path,
-        dpi=200,
-        bbox_inches="tight"
+        f"{PLOT_DIR}/{MODEL_NAME}_psnr_curve.png"
     )
 
     plt.close()
 
-    print("\nPlots saved:")
-    print(loss_path)
-    print(psnr_path)
 
-
-# =========================
-# Main
-# =========================
+# ============================================================
+# TRAINING
+# ============================================================
 
 def main():
 
-    print("=" * 55)
-    print("SRCNN TRAINING")
-    print("=" * 55)
+    print("\n" + "=" * 50)
+    print(f"{MODEL_NAME.upper()} TRAINING")
+    print("=" * 50)
 
-    print("Device:", DEVICE)
+    print(f"Device: {DEVICE}")
+    print(f"Model: {MODEL_NAME}")
+    print(f"Batch Size: {BATCH_SIZE}")
+    print(f"Learning Rate: {LEARNING_RATE}")
+    print(f"Epochs: {NUM_EPOCHS}")
 
-    # =========================
-    # Dataset
-    # =========================
+
+    # --------------------------------------------------------
+    # DATASET
+    # --------------------------------------------------------
 
     train_dataset = SuperResolutionDataset(
         TRAIN_DIR
@@ -203,20 +207,6 @@ def main():
     val_dataset = SuperResolutionDataset(
         VAL_DIR
     )
-
-    print(
-        "Training samples:",
-        len(train_dataset)
-    )
-
-    print(
-        "Validation samples:",
-        len(val_dataset)
-    )
-
-    # =========================
-    # DataLoaders
-    # =========================
 
     train_loader = DataLoader(
         train_dataset,
@@ -230,43 +220,53 @@ def main():
         shuffle=False
     )
 
-    # =========================
-    # Model
-    # =========================
+    print(
+        f"Training images: {len(train_dataset)}"
+    )
 
-    model = SRCNN().to(DEVICE)
+    print(
+        f"Validation images: {len(val_dataset)}"
+    )
 
-    # =========================
-    # Loss
-    # =========================
+
+    # --------------------------------------------------------
+    # MODEL
+    # --------------------------------------------------------
+
+    model.to(DEVICE)
+
+    print(
+        f"Trainable parameters: "
+        f"{sum(p.numel() for p in model.parameters() if p.requires_grad):,}"
+    )
+
+
+    # --------------------------------------------------------
+    # LOSS + OPTIMIZER
+    # --------------------------------------------------------
 
     criterion = nn.MSELoss()
-
-    # =========================
-    # Optimizer
-    # =========================
 
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=LEARNING_RATE
     )
 
-    # =========================
-    # History
-    # =========================
+
+    # --------------------------------------------------------
+    # HISTORY
+    # --------------------------------------------------------
 
     train_losses = []
     val_losses = []
     val_psnrs = []
 
-    best_val_psnr = float("-inf")
+    best_psnr = -float("inf")
 
-    print("\nStarting training...")
-    print("=" * 55)
 
-    # =========================
-    # Training loop
-    # =========================
+    # --------------------------------------------------------
+    # TRAINING LOOP
+    # --------------------------------------------------------
 
     for epoch in range(NUM_EPOCHS):
 
@@ -274,21 +274,26 @@ def main():
 
         running_loss = 0.0
 
+
         progress_bar = tqdm(
             train_loader,
             desc=f"Epoch {epoch + 1}/{NUM_EPOCHS}"
         )
+
 
         for inputs, targets in progress_bar:
 
             inputs = inputs.to(DEVICE)
             targets = targets.to(DEVICE)
 
+
             # Clear gradients
             optimizer.zero_grad()
 
+
             # Forward pass
             outputs = model(inputs)
+
 
             # Calculate loss
             loss = criterion(
@@ -296,23 +301,32 @@ def main():
                 targets
             )
 
+
             # Backpropagation
             loss.backward()
+
 
             # Update weights
             optimizer.step()
 
-            running_loss += loss.item()
+
+            running_loss += (
+                loss.item() *
+                inputs.size(0)
+            )
+
 
             progress_bar.set_postfix(
-                loss=f"{loss.item():.6f}"
+                loss=loss.item()
             )
+
 
         # Average training loss
         train_loss = (
             running_loss /
-            len(train_loader)
+            len(train_dataset)
         )
+
 
         # Validation
         val_loss, val_psnr = validate(
@@ -321,74 +335,55 @@ def main():
             criterion
         )
 
-        # Save history
+
         train_losses.append(train_loss)
         val_losses.append(val_loss)
         val_psnrs.append(val_psnr)
 
-        # Print results
-        print(
-            f"\nEpoch [{epoch + 1:02d}/{NUM_EPOCHS}]"
-        )
 
         print(
-            f"Train Loss : {train_loss:.6f}"
+            f"Epoch {epoch + 1:02d} | "
+            f"Train Loss: {train_loss:.6f} | "
+            f"Val Loss: {val_loss:.6f} | "
+            f"Val PSNR: {val_psnr:.3f} dB"
         )
 
-        print(
-            f"Val Loss   : {val_loss:.6f}"
-        )
 
-        print(
-            f"Val PSNR   : {val_psnr:.3f} dB"
-        )
+        # ----------------------------------------------------
+        # SAVE BEST MODEL
+        # ----------------------------------------------------
 
-        # =========================
-        # Save best model
-        # =========================
+        if val_psnr > best_psnr:
 
-        if val_psnr > best_val_psnr:
-
-            best_val_psnr = val_psnr
-
-            model_path = os.path.join(
-                MODEL_DIR,
-                "srcnn_best.pth"
-            )
+            best_psnr = val_psnr
 
             torch.save(
                 model.state_dict(),
-                model_path
+                f"{MODEL_DIR}/{MODEL_NAME}_best.pth"
             )
 
             print(
-                f"✓ New best model saved "
-                f"({best_val_psnr:.3f} dB)"
+                f"  ✓ Best {MODEL_NAME.upper()} model saved"
             )
 
-    # =========================
-    # Save history
-    # =========================
 
-    history = {
-        "train_losses": train_losses,
-        "val_losses": val_losses,
-        "val_psnrs": val_psnrs
-    }
-
-    history_path = os.path.join(
-        PLOT_DIR,
-        "training_history.pth"
-    )
+    # --------------------------------------------------------
+    # SAVE TRAINING HISTORY
+    # --------------------------------------------------------
 
     torch.save(
-        history,
-        history_path
+        {
+            "train_losses": train_losses,
+            "val_losses": val_losses,
+            "val_psnrs": val_psnrs
+        },
+        f"{PLOT_DIR}/{MODEL_NAME}_training_history.pth"
     )
 
-    # =========================
-    # Generate plots
-    # =========================
+
+    # --------------------------------------------------------
+    # SAVE PLOTS
+    # --------------------------------------------------------
 
     save_plots(
         train_losses,
@@ -396,29 +391,30 @@ def main():
         val_psnrs
     )
 
-    # =========================
-    # Finished
-    # =========================
 
-    print("\n" + "=" * 55)
+    # --------------------------------------------------------
+    # FINAL RESULTS
+    # --------------------------------------------------------
+
+    print("\n" + "=" * 50)
     print("TRAINING COMPLETE")
-    print("=" * 55)
+    print("=" * 50)
 
     print(
-        f"Best validation PSNR: "
-        f"{best_val_psnr:.3f} dB"
+        f"Best Validation PSNR: "
+        f"{best_psnr:.3f} dB"
     )
 
     print(
-        f"Best model: "
-        f"{MODEL_DIR}/srcnn_best.pth"
+        f"Model saved to: "
+        f"{MODEL_DIR}/{MODEL_NAME}_best.pth"
     )
 
     print(
-        f"History: "
-        f"{history_path}"
+        f"Plots saved to: "
+        f"{PLOT_DIR}/"
     )
 
 
 if __name__ == "__main__":
-    main()
+    main() 
