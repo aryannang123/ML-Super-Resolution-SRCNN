@@ -1,8 +1,8 @@
-# ML Super-Resolution using SRCNN
+# ML Super-Resolution using SRCNN and FSRCNN-style Model
 
-A PyTorch implementation of Single Image Super-Resolution using a Super-Resolution Convolutional Neural Network (SRCNN).
+A PyTorch implementation of single-image super-resolution using SRCNN and an enhanced FSRCNN-style convolutional neural network.
 
-The project reconstructs high-resolution images from degraded low-resolution inputs and compares SRCNN against Nearest Neighbor, Bilinear, and Bicubic interpolation.
+The project reconstructs high-resolution images from degraded low-resolution inputs and compares both learned models against Nearest Neighbor, Bilinear, and Bicubic interpolation.
 
 ## Project Overview
 
@@ -10,11 +10,11 @@ Image super-resolution is the process of recovering a high-resolution image from
 
 ### Objectives
 
-- Implement SRCNN using PyTorch
+- Implement SRCNN and an enhanced FSRCNN-style model using PyTorch
 - Prepare paired low-resolution and high-resolution images
 - Train using Mean Squared Error (MSE)
 - Evaluate using MSE and PSNR
-- Compare SRCNN with traditional interpolation methods
+- Compare SRCNN and the enhanced FSRCNN-style model with traditional interpolation methods
 - Visualize reconstruction and training results
 
 ## SRCNN Architecture
@@ -48,6 +48,46 @@ The model contains approximately 20,099 trainable parameters.
 | Conv2 | 64 -> 32 channels, 1x1 kernel |
 | ReLU | Activation |
 | Conv3 | 32 -> 3 channels, 5x5 kernel |
+
+## Enhanced FSRCNN-Style Architecture
+
+In addition to SRCNN, the project implements an enhanced FSRCNN-style model. It processes the already-upscaled input at 224 x 224 resolution and uses a residual connection to preserve input information.
+
+```text
+Input Image (3 channels)
+        |
+        v
+Feature Extraction: Conv2D 3 -> 64, 5x5 + PReLU
+        |
+        v
+Shrinking: Conv2D 64 -> 16, 1x1 + PReLU
+        |
+        v
+Mapping: 8 x [Conv2D 16 -> 16, 3x3 + PReLU]
+        |
+        v
+Expanding: Conv2D 16 -> 64, 1x1 + PReLU
+        |
+        v
+Reconstruction: Conv2D 64 -> 3, 5x5
+        |
+        v
+Add input through residual connection
+        |
+        v
+Super-Resolved Image
+```
+
+| Stage | Configuration | Purpose |
+|---|---|---|
+| Feature extraction | 3 -> 64 channels, 5x5 + PReLU | Extract image features |
+| Shrinking | 64 -> 16 channels, 1x1 + PReLU | Reduce feature channels and computation |
+| Mapping | 8 layers, each 16 -> 16 channels, 3x3 + PReLU | Learn feature transformations |
+| Expanding | 16 -> 64 channels, 1x1 + PReLU | Expand feature representation |
+| Reconstruction | 64 -> 3 channels, 5x5 | Generate RGB output |
+| Residual connection | Add original input | Preserve input information |
+
+**Note:** This is an enhanced FSRCNN-style implementation, not an exact reproduction of the canonical FSRCNN architecture.
 
 ## Dataset
 
@@ -93,11 +133,11 @@ The SRCNN receives the degraded 224 x 224 image and reconstructs the correspondi
 | Parameter | Value |
 |---|---|
 | Framework | PyTorch |
-| Optimizer | Adam |
-| Loss Function | Mean Squared Error |
-| Learning Rate | 0.001 |
-| Batch Size | 2 |
-| Epochs | 50 |
+| Optimizer | Adam (both models) |
+| Loss Function | Mean Squared Error (both models) |
+| Learning Rate | 0.001 (SRCNN) / 0.0001 (FSRCNN-style) |
+| Batch Size | 2 (both models) |
+| Epochs | 50 (SRCNN) / 100 (FSRCNN-style) |
 | Input Size | 224 x 224 |
 | Target Size | 224 x 224 |
 | Device | CPU / CUDA if available |
@@ -106,6 +146,7 @@ The best model is selected using validation PSNR and saved as:
 
 ```text
 outputs/models/srcnn_best.pth
+outputs/models/fsrcnn_best.pth
 ```
 
 ## Evaluation Metrics
@@ -126,17 +167,20 @@ PSNR measures reconstruction quality in decibels (dB). Higher PSNR indicates bet
 | Bilinear | 0.003406 | 24.678 |
 | Bicubic | 0.002705 | 25.678 |
 | **SRCNN** | **0.002306** | **26.372** |
+| **Enhanced FSRCNN-style** | **0.001658** | **27.805** |
 
 Best validation PSNR: **25.091 dB**
 
-SRCNN achieved the highest test PSNR among the evaluated methods.
+The enhanced FSRCNN-style model achieved the highest test PSNR among the evaluated methods.
 
 Compared with Bicubic:
 
 - Bicubic PSNR: 25.678 dB
-- SRCNN PSNR: 26.372 dB
-- Improvement: **0.694 dB**
-- SRCNN MSE reduction relative to Bicubic: approximately **14.75%**
+- SRCNN PSNR: 26.372 dB (**0.694 dB improvement**)
+- Enhanced FSRCNN-style PSNR: 27.805 dB (**2.127 dB improvement**)
+- Enhanced FSRCNN-style MSE reduction relative to Bicubic: approximately **38.7%**
+
+Compared with SRCNN, the enhanced FSRCNN-style model improved PSNR by **1.433 dB** and reduced MSE by approximately **28.1%**.
 
 ## Results and Visualizations
 
@@ -163,6 +207,7 @@ The visual comparison contains:
 - Bilinear
 - Bicubic
 - SRCNN
+- Enhanced FSRCNN-style output
 - Ground Truth
 
 ## Project Structure
@@ -172,7 +217,8 @@ ML-Super-Resolution-SRCNN/
 |
 ├── src/
 │   ├── dataset.py
-│   ├── model.py
+│   ├── model.py          # SRCNN
+│   ├── fsrcnn.py         # Enhanced FSRCNN-style model
 │   ├── train.py
 │   ├── evaluate.py
 │   ├── visualize.py
@@ -255,16 +301,28 @@ python src/dataset.py
 python src/model.py
 ```
 
-### Train
+### Train SRCNN
 
 ```bash
-python src/train.py
+python src/train.py --model srcnn
 ```
 
-The best model is saved to:
+Best checkpoint:
 
 ```text
 outputs/models/srcnn_best.pth
+```
+
+### Train enhanced FSRCNN-style model
+
+```bash
+python src/train.py --model fsrcnn
+```
+
+Best checkpoint:
+
+```text
+outputs/models/fsrcnn_best.pth
 ```
 
 Training history and plots are saved to:
@@ -273,13 +331,19 @@ Training history and plots are saved to:
 outputs/plots/
 ```
 
-### Evaluate
+### Evaluate SRCNN
 
 ```bash
-python src/evaluate.py
+python src/evaluate.py --model srcnn
 ```
 
-This calculates MSE and PSNR for SRCNN and the interpolation baselines.
+### Evaluate enhanced FSRCNN-style model
+
+```bash
+python src/evaluate.py --model fsrcnn
+```
+
+Evaluation calculates MSE and PSNR for the selected model and the interpolation baselines.
 
 Predictions are saved to:
 
@@ -301,11 +365,13 @@ python src/results.py
 
 ## Conclusion
 
-The implemented SRCNN successfully learned to reconstruct high-resolution images from degraded inputs.
+Both SRCNN and the enhanced FSRCNN-style model learned to reconstruct high-resolution images from degraded inputs.
 
-On the final 20-image test set, SRCNN achieved:
+On the final 20-image test set:
 
-- **Test PSNR: 26.372 dB**
-- **Test MSE: 0.002306**
+- SRCNN achieved **26.372 dB PSNR** and **0.002306 MSE**.
+- The enhanced FSRCNN-style model achieved **27.805 dB PSNR** and **0.001658 MSE**.
 
-Bicubic interpolation achieved 25.678 dB, while SRCNN achieved 26.372 dB, giving a 0.694 dB improvement in PSNR for this experiment.
+Bicubic interpolation achieved 25.678 dB. SRCNN improved PSNR by 0.694 dB over Bicubic, while the enhanced FSRCNN-style model improved it by 2.127 dB in this experiment.
+
+The two neural models used different training configurations, so these results reflect the configurations run rather than a controlled architecture-only comparison.
